@@ -12,6 +12,7 @@ on:
 jobs: # ← todos los jobs van anidados aquí
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     outputs:
       build_tag: ${{ steps.meta.outputs.tag }}
@@ -41,11 +42,23 @@ jobs: # ← todos los jobs van anidados aquí
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # STEP 5: Run tests
-      - name: Run tests
+      # STEP 5: Run tests con Quality Gate
+      - name: Run tests with coverage gate
         run: |
           export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-          pytest -q
+          pytest -q --junitxml=report.xml \
+            --cov --cov-report=term-missing --cov-report=xml \
+            --cov-fail-under=80
+
+      # Sube reportes de tests y de cobertura como artefactos
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: |
+            report.xml
+            coverage.xml
 
       # STEP 6: Create build tag  ← el step que alimenta outputs.build_tag
       - name: Compute build tag
@@ -63,6 +76,23 @@ jobs: # ← todos los jobs van anidados aquí
         with:
           name: build-info
           path: build-info.txt
+
+      # STEP: Publicar Summary con Cobertura
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "## 🧪 Resultado del job test"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Build tag | \`${{ steps.meta.outputs.tag }}\` |"
+            echo "| Python | $(python --version) |"
+            echo "| Tests | $(grep -o 'tests="[0-9]*"' report.xml | head -1) |"
+            echo "| Fallos | $(grep -o 'failures="[0-9]*"' report.xml | head -1) |"
+            echo "| Cobertura | $(python -c "import xml.etree.ElementTree as ET; print(f\"{float(ET.parse('coverage.xml').getroot().get('line-rate'))*100:.0f}%\")" 2>/dev/null || echo n/a) (mínimo 80%) |"
+            echo "| Estado | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   package:
     needs: test # Dependencia: espera a que termine 'test'
